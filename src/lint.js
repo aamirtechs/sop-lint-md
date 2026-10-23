@@ -1,7 +1,5 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const { toCsv } = require('./csv');
 
 const DEFAULT_REQUIRED_FIELDS = ['owner', 'version', 'reviewDate', 'department'];
@@ -116,6 +114,20 @@ function parseDateOnly(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function resolveLinkPath(relPath, filePart) {
+  let target = String(filePart || '').replace(/\\/g, '/');
+  const isAbs = target.startsWith('/');
+  if (isAbs) target = target.slice(1);
+  const dir = String(relPath || '').replace(/\\/g, '/').split('/').slice(0, -1);
+  const parts = isAbs ? [] : dir.slice();
+  for (const seg of target.split('/')) {
+    if (!seg || seg === '.') continue;
+    else if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join('/');
+}
+
 function lintContent(relPath, text, options, baseDir) {
   const opts = options || {};
   const requiredFields = opts.requiredFields || DEFAULT_REQUIRED_FIELDS;
@@ -168,11 +180,24 @@ function lintContent(relPath, text, options, baseDir) {
       if (/^(https?:|mailto:|#)/i.test(target)) continue;
       const filePart = decodeURIComponent(target.split('#')[0]);
       if (!filePart) continue;
-      const root = path.resolve(baseDir || '.');
-      const candidate = path.isAbsolute(filePart)
-        ? filePart
-        : path.resolve(root, path.dirname(relPath), filePart);
-      if (!fs.existsSync(candidate)) {
+      let exists;
+      if (opts.existingFiles || typeof opts.fileExists === 'function') {
+        const pure = resolveLinkPath(relPath, filePart);
+        if (typeof opts.fileExists === 'function') exists = !!opts.fileExists(pure);
+        else {
+          const set = opts.existingFiles instanceof Set ? opts.existingFiles : new Set(opts.existingFiles);
+          exists = set.has(pure);
+        }
+      } else {
+        const fs = require('fs');
+        const path = require('path');
+        const root = path.resolve(baseDir || '.');
+        const candidate = path.isAbsolute(filePart)
+          ? filePart
+          : path.resolve(root, path.dirname(relPath), filePart);
+        exists = fs.existsSync(candidate);
+      }
+      if (!exists) {
         add(lineNo, 'broken-link', 'Internal link target does not exist: ' + target);
       }
     }
@@ -182,6 +207,8 @@ function lintContent(relPath, text, options, baseDir) {
 }
 
 function collectMarkdownFiles(dir) {
+  const fs = require('fs');
+  const path = require('path');
   const out = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -198,6 +225,8 @@ function collectMarkdownFiles(dir) {
 }
 
 function lintFolder(dir, options) {
+  const fs = require('fs');
+  const path = require('path');
   const files = collectMarkdownFiles(dir);
   const results = files.map((full) => {
     const rel = path.relative(dir, full);
@@ -209,6 +238,24 @@ function lintFolder(dir, options) {
     (a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.rule.localeCompare(b.rule)
   );
   return { fileCount: files.length, results, findings };
+}
+
+function lintFiles(files, options) {
+  const list = (files || [])
+    .map((f) => ({
+      rel: String((f && (f.path || f.name)) || '').replace(/\\/g, '/').replace(/^\.\//, ''),
+      text: f && typeof f.content === 'string' ? f.content : '',
+    }))
+    .filter((f) => f.rel.toLowerCase().endsWith('.md'));
+  list.sort((a, b) => a.rel.localeCompare(b.rel));
+  const existingFiles = new Set(list.map((f) => f.rel));
+  const opts = { ...(options || {}), existingFiles };
+  const results = list.map((f) => lintContent(f.rel, f.text, opts, '.'));
+  const findings = results.flatMap((r) => r.findings);
+  findings.sort(
+    (a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.rule.localeCompare(b.rule)
+  );
+  return { fileCount: list.length, results, findings };
 }
 
 function findingsCsv(findings) {
@@ -260,8 +307,10 @@ module.exports = {
   isVerbWord,
   firstWordOfStep,
   lintContent,
+  resolveLinkPath,
   collectMarkdownFiles,
   lintFolder,
+  lintFiles,
   findingsCsv,
   renderReport,
 };

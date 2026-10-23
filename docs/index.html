@@ -77,7 +77,25 @@ footer .links a{margin:0 10px}
   .grid{grid-template-columns:1fr}
 }
 </style>
+
+<style>
+.tool label{display:block;font-weight:600;font-size:.9rem;margin-bottom:6px}
+.tool input[type=file]{width:100%;padding:13px;border:1.5px dashed #b9c6d4;border-radius:9px;background:#fbfcfe;margin-bottom:12px}
+.tool input[type=text],.tool input[type=date],.tool input[type=number],.tool textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font:inherit;background:#fff;margin-bottom:12px}
+.tool textarea{min-height:110px;font-family:Consolas,monospace;font-size:.85rem}
+.tool .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:680px){.tool .grid2{grid-template-columns:1fr}}
+button.go{background:var(--gold);color:#171106;border:0;font:inherit;font-weight:700;padding:13px 26px;border-radius:10px;cursor:pointer;width:100%;font-size:1.02rem}
+button.dl{background:var(--navy);color:#fff;border:0;font:inherit;font-weight:600;padding:10px 18px;border-radius:9px;cursor:pointer;margin-right:8px;margin-top:10px}
+#status{margin-top:14px;font-weight:600}
+#status.error{color:#b3261e}
+pre.report{background:#0e1622;color:#d7e3f2;border-radius:12px;padding:18px;overflow:auto;max-height:520px;font-size:.82rem;line-height:1.55;white-space:pre-wrap;text-align:left}
+.hidden{display:none}
+.hint{color:var(--muted);font-size:.85rem;margin:-6px 0 12px}
+.drop{border:2px dashed var(--gold);border-radius:12px;padding:16px;text-align:center;color:var(--muted);margin-bottom:16px;background:#fffdf4}
+</style>
 </head>
+<body>
 <body>
 <header class="hero">
   <span class="tag">Free open source tool</span>
@@ -86,6 +104,27 @@ footer .links a{margin:0 10px}
   <a class="btn" href="https://github.com/aamirtechs/sop-lint-md">View source on GitHub</a>
 </header>
 <main class="wrap">
+
+  <section class="tool" id="toolCard">
+    <h2>Run sop-lint-md in your browser</h2>
+    <p class="note">Runs fully in your browser, files never leave your device.</p>
+    <div class="drop" id="dropZone">Drag and drop a folder of Markdown SOP files here, or use the folder picker below.</div>
+    <label for="folder">1. Folder of Markdown SOP files (.md, scanned recursively)</label>
+    <input type="file" id="folder" webkitdirectory multiple accept=".md">
+    <label for="files">Or pick multiple Markdown files</label>
+    <input type="file" id="files" multiple accept=".md,.markdown,.txt">
+    <label for="configFile">Optional: config JSON (requiredFields, vagueTerms, referenceDate)</label>
+    <input type="file" id="configFile" accept=".json,.txt">
+    <label for="configText">Or paste config JSON</label>
+    <textarea id="configText" placeholder="Leave empty for defaults"></textarea>
+    <label for="referenceDate">Reference date override (YYYY-MM-DD, blank uses config or today)</label>
+    <input type="date" id="referenceDate">
+    <button class="go" id="runBtn">Run SOP lint</button>
+    <div id="status" role="status"></div>
+    <div id="downloads"></div>
+  </section>
+  <section id="reportWrap" class="hidden"><h2>Report</h2><pre class="report" id="report"></pre></section>
+
   <section>
     <h2>What it does</h2>
     <div class="grid">
@@ -110,5 +149,77 @@ node src/cli.js examples/sops --out-dir out</code></pre>
   <p>Built by Amir Hussain, operations manager and founder of AamirTechs.</p>
   <p class="links"><a href="https://aamirtechs.com">AamirTechs: operations, customer support and e-commerce services</a> <a href="https://github.com/aamirtechs">More open source tools</a></p>
 </footer>
+<script src="app.js"></script>
+<script>
+
+function download(name, text, type) {
+  var blob = new Blob([text], { type: type || 'text/plain;charset=utf-8' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+}
+function setFiles(input, files) {
+  try { var dt = new DataTransfer(); for (var i = 0; i < files.length; i++) dt.items.add(files[i]); input.files = dt.files; } catch (e) {}
+}
+function readInput(fileInput, textId) {
+  var ta = document.getElementById(textId);
+  if (ta && ta.value.trim()) return Promise.resolve(ta.value);
+  var f = fileInput.files[0];
+  if (!f) return Promise.reject(new Error('Choose a file or paste its contents first.'));
+  return f.text();
+}
+
+(function () {
+  var dz = document.getElementById('dropZone');
+  dz.addEventListener('dragover', function (e) { e.preventDefault(); });
+  dz.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files.length) setFiles(document.getElementById('files'), Array.prototype.slice.call(e.dataTransfer.files)); });
+  function relPath(f) {
+    var p = f.webkitRelativePath || f.name;
+    var parts = p.split('/');
+    if (parts.length > 1) parts = parts.slice(1);
+    return parts.join('/');
+  }
+  document.getElementById('runBtn').addEventListener('click', async function () {
+    var status = document.getElementById('status'); var downloads = document.getElementById('downloads'); var reportWrap = document.getElementById('reportWrap');
+    status.className = ''; status.textContent = ''; downloads.innerHTML = ''; reportWrap.classList.add('hidden');
+    try {
+      var chosen = document.getElementById('folder').files.length ? document.getElementById('folder').files : document.getElementById('files').files;
+      if (!chosen.length) throw new Error('Choose a folder of Markdown SOP files, or pick multiple Markdown files first.');
+      var files = [];
+      for (var i = 0; i < chosen.length; i++) {
+        var f = chosen[i];
+        if (!f.name.toLowerCase().endsWith('.md')) continue;
+        files.push({ path: relPath(f), content: await f.text() });
+      }
+      if (!files.length) throw new Error('No .md files found in that selection.');
+      var config = {};
+      var ct = document.getElementById('configText').value.trim();
+      var cf = document.getElementById('configFile').files[0];
+      if (ct) config = JSON.parse(ct);
+      else if (cf) config = JSON.parse(await cf.text());
+      var options = Object.assign({}, config);
+      var rd = document.getElementById('referenceDate').value;
+      if (rd) options.referenceDate = rd;
+      var api = window.SopLintMd;
+      var result = api.lintFiles(files, options);
+      var reportText = api.renderReport(result, options);
+      var csv = api.findingsCsv(result.findings);
+      var byRule = {};
+      result.findings.forEach(function (x) { byRule[x.rule] = (byRule[x.rule] || 0) + 1; });
+      var ruleText = Object.keys(byRule).sort().map(function (k) { return k + ': ' + byRule[k]; }).join(', ');
+      status.textContent = 'Files checked: ' + result.fileCount + '. Total findings: ' + result.findings.length + (ruleText ? ' (' + ruleText + ')' : '') + '.';
+      var b1 = document.createElement('button'); b1.className = 'dl'; b1.textContent = 'Download report.md';
+      b1.addEventListener('click', function () { download('report.md', reportText, 'text/markdown;charset=utf-8'); });
+      var b2 = document.createElement('button'); b2.className = 'dl'; b2.textContent = 'Download findings.csv';
+      b2.addEventListener('click', function () { download('findings.csv', csv, 'text/csv;charset=utf-8'); });
+      downloads.appendChild(b1); downloads.appendChild(b2);
+      document.getElementById('report').textContent = reportText;
+      reportWrap.classList.remove('hidden');
+    } catch (e) { status.className = 'error'; status.textContent = e.message; }
+  });
+})();
+
+</script>
 </body>
 </html>

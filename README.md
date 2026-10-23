@@ -1,5 +1,6 @@
 # sop-lint-md
 Live page: https://aamirtechs.github.io/sop-lint-md/
+Use it in your browser: the Pages site above runs the full tool locally, no install needed.
 
 Lint Markdown SOPs and runbooks for operations content, not style: missing owner, version or review date, overdue reviews, vague steps like promptly or as needed, steps with no verb, and broken internal links.
 
